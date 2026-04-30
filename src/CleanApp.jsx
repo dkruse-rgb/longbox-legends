@@ -1,11 +1,12 @@
-import AppPrototype from "./AppV24.jsx";
+import CleanGame from "./CleanGame.jsx";
 
 // Longbox Legends clean entry point.
 //
-// The current playable game still lives in the prototype stack while the app is
-// being safely refactored into modules under src/game and src/components.
-// Keeping this compatibility layer lets us improve the architecture without
-// breaking the deployed GitHub Pages build.
+// The deployed game now runs through the rebuilt component architecture:
+// GameShell, FloorMap, ZoneDetails, LiveDay, MissionSystem, and CollectionModal.
+// The older AppV prototype files remain in the repo as fallback/reference while
+// new work moves into reusable components under src/components and logic modules
+// under src/game.
 export default function CleanApp() {
-  return <AppPrototype />;
+  return <CleanGame />;
 }
