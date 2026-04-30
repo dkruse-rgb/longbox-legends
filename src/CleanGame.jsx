@@ -5,7 +5,7 @@ import GameShell from "./components/GameShell";
 import LiveDay from "./components/LiveDay";
 import MissionSystem from "./components/MissionSystem";
 import ZoneDetails from "./components/ZoneDetails";
-import { INVENTORY_CATALOG, UPGRADE_NAMES } from "./game/catalog";
+import { getTrend, INVENTORY_CATALOG, isNewComicDay, UPGRADE_NAMES } from "./game/catalog";
 import { getSave, getUpgrades, setSave, stockFor, totalStock } from "./game/save";
 
 const START_SAVE = {
@@ -66,8 +66,10 @@ function estimateTraffic(save) {
 function runSimpleDay(save) {
   const inventory = Array.isArray(save.inventory) ? save.inventory.map(item => ({ ...item })) : [];
   const traffic = estimateTraffic(save);
+  const trend = getTrend(save.day || 1);
   let gross = 0;
   let sales = 0;
+  let trendSales = 0;
   const lines = [];
 
   for (let i = 0; i < traffic; i += 1) {
@@ -78,10 +80,13 @@ function runSimpleDay(save) {
     }
     const item = available[Math.floor(Math.random() * available.length)];
     item.stock -= 1;
-    const price = Math.round((item.price || 8) * (1 + Math.min(Number(save.rep) || 0, 80) / 250));
+    const isTrendSale = item.id === trend.itemId;
+    const trendBonus = isTrendSale ? 1.45 : 1;
+    const price = Math.round((item.price || 8) * trendBonus * (1 + Math.min(Number(save.rep) || 0, 80) / 250));
     gross += price;
     sales += 1;
-    if (lines.length < 4) lines.push(`${item.icon || "📦"} Sold ${item.name} for $${price}.`);
+    if (isTrendSale) trendSales += 1;
+    if (lines.length < 4) lines.push(`${item.icon || "📦"} Sold ${item.name} for $${price}${isTrendSale ? " — trend boosted" : ""}.`);
   }
 
   const rent = 35 + getUpgrades(save).length * 8;
@@ -94,9 +99,10 @@ function runSimpleDay(save) {
     cash: Math.max(0, (Number(save.cash) || 0) + net),
     rep: Math.min(100, Math.max(0, (Number(save.rep) || 0) + repChange)),
     inventory,
+    trendWins: (Number(save.trendWins) || 0) + trendSales,
     lifetimeSales: (Number(save.lifetimeSales) || 0) + gross,
     lifetimeVisitors: (Number(save.lifetimeVisitors) || 0) + traffic
-  }, `Day ${day}: ${traffic} visitors, ${sales} sales, $${gross.toLocaleString()} gross, $${net.toLocaleString()} net.`);
+  }, `Day ${day}: ${traffic} visitors, ${sales} sales, ${trendSales} trend, $${gross.toLocaleString()} gross, $${net.toLocaleString()} net.`);
 
   setSave(next);
   return {
@@ -106,6 +112,8 @@ function runSimpleDay(save) {
       headline: net >= 0 ? "Solid day behind the counter" : "Good traffic, thin wallet",
       visitors: traffic,
       sales,
+      trendSales,
+      trend,
       gross,
       rent,
       net,
@@ -151,6 +159,43 @@ function SectionCard({ eyebrow, title, children }) {
     {title && <h2 className="mt-1 text-2xl font-black">{title}</h2>}
     <div className="mt-4">{children}</div>
   </section>;
+}
+
+function TrendCard({ save }) {
+  const day = Number(save.day) || 1;
+  const trend = getTrend(day);
+  const item = INVENTORY_CATALOG[trend.itemId];
+  const stock = stockFor(save, trend.itemId);
+  const week = Math.floor((day - 1) / 7) + 1;
+  const isWednesdayMagic = isNewComicDay(day);
+
+  return <section className="overflow-hidden rounded-[2rem] bg-slate-950 text-white shadow-sm ring-1 ring-black/5">
+    <div className="relative p-5">
+      <div className="absolute inset-0 opacity-30" style={{ backgroundImage: "radial-gradient(circle at 80% 20%, #fbbf24, transparent 24%), radial-gradient(circle at 12% 80%, #38bdf8, transparent 25%)" }} />
+      <div className="relative">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="text-xs font-black uppercase tracking-widest text-amber-300">Week {week} Trend</div>
+            <h2 className="mt-1 text-2xl font-black">{trend.icon} {trend.name}</h2>
+            <p className="mt-1 text-sm font-semibold text-slate-300">{item?.name || "Trending items"} sell for a bonus this week.</p>
+          </div>
+          <div className="shrink-0 rounded-2xl bg-amber-400 px-3 py-2 text-sm font-black text-slate-950">145% sale value</div>
+        </div>
+        <div className="mt-4 grid grid-cols-3 gap-2">
+          <MiniDark label="Trend Stock" value={stock} />
+          <MiniDark label="Trend Sales" value={Number(save.trendWins) || 0} />
+          <MiniDark label="New Comic Day" value={isWednesdayMagic ? "Today" : `${7 - (day % 7)}d`} />
+        </div>
+      </div>
+    </div>
+  </section>;
+}
+
+function MiniDark({ label, value }) {
+  return <div className="rounded-2xl bg-white/10 p-3 ring-1 ring-white/10">
+    <div className="text-[10px] font-black uppercase tracking-wide text-slate-300">{label}</div>
+    <div className="mt-1 truncate text-lg font-black text-white">{value}</div>
+  </div>;
 }
 
 function BuyMarket({ save, onBuy }) {
@@ -210,10 +255,11 @@ function DayReport({ report, onClose }) {
     <div className="w-full max-w-lg rounded-[2rem] bg-white p-5 text-slate-950 shadow-2xl" onClick={event => event.stopPropagation()}>
       <div className="text-xs font-black uppercase tracking-widest text-amber-600">Day Report</div>
       <h2 className="mt-1 text-3xl font-black">{report.headline}</h2>
-      <p className="mt-1 text-sm font-semibold text-slate-500">Day {report.day} results are in.</p>
-      <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+      <p className="mt-1 text-sm font-semibold text-slate-500">Day {report.day} results are in. Weekly trend: {report.trend.icon} {report.trend.name}.</p>
+      <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-5">
         <Mini label="Visitors" value={report.visitors} />
         <Mini label="Sales" value={report.sales} />
+        <Mini label="Trend" value={report.trendSales} />
         <Mini label="Gross" value={`$${report.gross}`} />
         <Mini label="Net" value={`$${report.net}`} hot={report.net >= 0} />
       </div>
@@ -317,6 +363,7 @@ export default function CleanGame() {
       <div className="pb-20 lg:pb-0">
         {activeTab === "shop" && <div className="grid gap-4 lg:grid-cols-[1.25fr_.75fr]">
           <div className="space-y-4">
+            <TrendCard save={save} />
             <FloorMap
               upgrades={upgrades}
               interactive
@@ -333,9 +380,9 @@ export default function CleanGame() {
           </div>
 
           <aside className="space-y-4">
-            <SectionCard eyebrow="Clean Build" title="Shop Actions">
+            <SectionCard eyebrow="Clean Build" title="Quick Actions">
               <div className="grid gap-2">
-                <button onClick={() => setLiveOpen(true)} className="rounded-2xl bg-amber-400 px-4 py-3 text-sm font-black text-slate-950 active:scale-[.99]">▶ Open Shop Live</button>
+                <div className="rounded-2xl bg-amber-50 p-3 text-xs font-bold text-amber-950 ring-1 ring-amber-100">Use the main <b>Open</b> button in the header to run Live Day.</div>
                 <button onClick={handleFindComic} className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white active:scale-[.99]">🔎 Find Comic</button>
                 <button onClick={() => setCollectionOpen(true)} className="rounded-2xl bg-slate-100 px-4 py-3 text-sm font-black text-slate-700 active:scale-[.99]">📚 Collection</button>
                 <button onClick={() => setMissionsOpen(true)} className="rounded-2xl bg-slate-100 px-4 py-3 text-sm font-black text-slate-700 active:scale-[.99]">🎯 Missions</button>
