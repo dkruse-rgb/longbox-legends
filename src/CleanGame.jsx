@@ -1,14 +1,15 @@
 import React, { useEffect, useMemo, useState } from "react";
-import CollectionModal, { findComicForCollection } from "./components/CollectionModal";
+import CollectionModal from "./components/CollectionModal";
 import FloorMap from "./components/FloorMap";
 import GameShell from "./components/GameShell";
 import LiveDay from "./components/LiveDay";
 import MissionSystem from "./components/MissionSystem";
 import ZoneDetails from "./components/ZoneDetails";
 import { getTrend, INVENTORY_CATALOG, isNewComicDay, UPGRADE_NAMES } from "./game/catalog";
+import { rollNaturalComicFinds } from "./game/comics";
 import { getSave, getUpgrades, setSave, stockFor, totalStock } from "./game/save";
 
-const ECONOMY_VERSION = 2;
+const ECONOMY_VERSION = 3;
 
 const START_SAVE = {
   economyVersion: ECONOMY_VERSION,
@@ -35,7 +36,7 @@ const UPGRADE_META = {
   sign: { icon: "💡", desc: "More foot traffic and a storefront that does not look legally abandoned." },
   wall: { icon: "🗄️", desc: "Back issue hunters spend longer digging through the good stuff." },
   manga: { icon: "🍥", desc: "A stronger section for reliable manga readers." },
-  case: { icon: "🔐", desc: "Raises collector appeal and improves rare comic find chances." },
+  case: { icon: "🔐", desc: "Raises collector appeal and improves rare comic discovery odds." },
   tables: { icon: "🎲", desc: "A home for card players, events, and suspiciously intense dice rolling." },
   online: { icon: "📮", desc: "Future shipping and online order potential." },
   cafe: { icon: "☕", desc: "Makes the shop feel sticky. People browse longer." },
@@ -85,10 +86,11 @@ function normalizeSave(raw) {
     rep: Math.min(Number(raw.rep) || 0, repCapFor(raw)),
     comicCollection: keptComics,
     archivedComicCount: (Number(raw.archivedComicCount) || 0) + archivedCount,
-    archivedComicValue: (Number(raw.archivedComicValue) || 0) + archivedValue
+    archivedComicValue: (Number(raw.archivedComicValue) || 0) + archivedValue,
+    comicScoutsUsed: 0
   }, archivedCount > 0
     ? `Economy balanced: archived ${archivedCount} extra comics as legacy collection history.`
-    : "Economy balanced for the new growth curve."
+    : "Economy balanced. Collectibles now appear naturally during Live Day."
   );
   setSave(next);
   return next;
@@ -118,6 +120,7 @@ function runSimpleDay(save) {
   const inventory = Array.isArray(save.inventory) ? save.inventory.map(item => ({ ...item })) : [];
   const traffic = estimateTraffic(save);
   const trend = getTrend(save.day || 1);
+  const foundComics = rollNaturalComicFinds(save, traffic);
   let gross = 0;
   let sales = 0;
   let trendSales = 0;
@@ -140,28 +143,39 @@ function runSimpleDay(save) {
     if (lines.length < 4) lines.push(`${item.icon || "📦"} Sold ${item.name} for $${price}${isTrendSale ? " — trend boosted" : ""}.`);
   }
 
+  foundComics.forEach(comic => {
+    lines.unshift(`💥 Collectible found: ${comic.title} (${comic.rarity}) in ${comic.discoverySourceLabel || comic.foundSource}.`);
+  });
+
   const expenses = operatingExpense(save, traffic);
   const net = gross - expenses;
   const repChange = sales >= Math.ceil(traffic * 0.72) ? 1 : 0;
+  const findRepBonus = foundComics.length ? 1 : 0;
   const day = Number(save.day) || 1;
   const next = addLog({
     ...save,
     economyVersion: ECONOMY_VERSION,
     day: day + 1,
     cash: Math.max(0, (Number(save.cash) || 0) + net),
-    rep: Math.min(repCapFor(save), Math.max(0, (Number(save.rep) || 0) + repChange)),
+    rep: Math.min(repCapFor(save), Math.max(0, (Number(save.rep) || 0) + repChange + findRepBonus)),
     inventory,
+    comicCollection: [...foundComics, ...(Array.isArray(save.comicCollection) ? save.comicCollection : [])].slice(0, 100),
+    naturalFinds: (Number(save.naturalFinds) || 0) + foundComics.length,
     trendWins: (Number(save.trendWins) || 0) + trendSales,
     lifetimeSales: (Number(save.lifetimeSales) || 0) + gross,
     lifetimeVisitors: (Number(save.lifetimeVisitors) || 0) + traffic
-  }, `Day ${day}: ${traffic} visitors, ${sales} sales, ${trendSales} trend, $${gross.toLocaleString()} gross, $${net.toLocaleString()} net.`);
+  }, `Day ${day}: ${traffic} visitors, ${sales} sales, ${trendSales} trend, ${foundComics.length} finds, $${gross.toLocaleString()} gross, $${net.toLocaleString()} net.`);
 
   setSave(next);
+  if (foundComics.length) {
+    window.dispatchEvent(new CustomEvent("longbox-collection-changed", { detail: { found: foundComics[0], foundAll: foundComics } }));
+  }
+
   return {
     next,
     report: {
       day,
-      headline: net >= 0 ? "Solid day behind the counter" : "Good traffic, thin wallet",
+      headline: foundComics.length ? "Collector magic hit the floor" : net >= 0 ? "Solid day behind the counter" : "Good traffic, thin wallet",
       visitors: traffic,
       sales,
       trendSales,
@@ -170,7 +184,8 @@ function runSimpleDay(save) {
       rent: expenses,
       expenses,
       net,
-      repChange,
+      repChange: repChange + findRepBonus,
+      foundComics,
       lines
     }
   };
@@ -305,10 +320,27 @@ function ShopFeed({ save }) {
 function DayReport({ report, onClose }) {
   if (!report) return null;
   return <div className="fixed inset-0 z-[160] flex items-end justify-center bg-black/55 p-3 backdrop-blur-sm sm:items-center" onClick={onClose}>
-    <div className="w-full max-w-lg rounded-[2rem] bg-white p-5 text-slate-950 shadow-2xl" onClick={event => event.stopPropagation()}>
+    <div className="max-h-[88vh] w-full max-w-lg overflow-y-auto rounded-[2rem] bg-white p-5 text-slate-950 shadow-2xl" onClick={event => event.stopPropagation()}>
       <div className="text-xs font-black uppercase tracking-widest text-amber-600">Day Report</div>
       <h2 className="mt-1 text-3xl font-black">{report.headline}</h2>
       <p className="mt-1 text-sm font-semibold text-slate-500">Day {report.day} results are in. Weekly trend: {report.trend.icon} {report.trend.name}.</p>
+      {report.foundComics?.length > 0 && <div className="mt-4 space-y-3">
+        {report.foundComics.map(comic => <div key={comic.uid} className="rounded-[1.5rem] bg-amber-50 p-4 ring-1 ring-amber-200">
+          <div className="text-xs font-black uppercase tracking-widest text-amber-700">Collectible Found!</div>
+          <div className="mt-2 flex items-start gap-3">
+            <div className="text-4xl">{comic.icon}</div>
+            <div className="min-w-0">
+              <h3 className="text-xl font-black leading-tight">{comic.title}</h3>
+              <p className="mt-1 text-sm font-bold text-slate-600">{comic.rarity} · {comic.grade} · {comic.discoverySourceLabel || comic.foundSource}</p>
+              <p className="mt-2 text-sm font-semibold text-slate-600">{comic.desc}</p>
+            </div>
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <Mini label="Value" value={`$${comic.value}`} />
+            <Mini label="Prestige" value={`+${comic.prestige}`} />
+          </div>
+        </div>)}
+      </div>}
       <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-5">
         <Mini label="Visitors" value={report.visitors} />
         <Mini label="Sales" value={report.sales} />
@@ -378,11 +410,6 @@ export default function CleanGame() {
     setLiveOpen(false);
   }
 
-  function handleFindComic() {
-    findComicForCollection("Paid Scout Search");
-    setLocalSave(getSave() || save);
-  }
-
   function handleNav(id) {
     if (id === "goals") {
       setMissionsOpen(true);
@@ -404,21 +431,12 @@ export default function CleanGame() {
   }
 
   return <>
-    <GameShell
-      day={save.day || 1}
-      cash={Number(save.cash) || 0}
-      rep={Number(save.rep) || 0}
-      stock={totalStock(save)}
-      traffic={traffic}
-      onOpenShop={() => setLiveOpen(true)}
-      onMissions={() => setMissionsOpen(true)}
-      onCollection={() => setCollectionOpen(true)}
-    >
+    <GameShell day={save.day || 1} cash={Number(save.cash) || 0} rep={Number(save.rep) || 0} stock={totalStock(save)} traffic={traffic} onOpenShop={() => setLiveOpen(true)} onMissions={() => setMissionsOpen(true)} onCollection={() => setCollectionOpen(true)}>
       <div className="pb-20 lg:pb-0">
         {activeTab === "shop" && <div className="grid gap-4 lg:grid-cols-[1.25fr_.75fr]">
           <div className="space-y-4">
             <TrendCard save={save} />
-            <FloorMap upgrades={upgrades} interactive selectedZoneId={selectedZone?.id} onZoneClick={setSelectedZone} title="Clean Floor Map" subtitle="Reusable FloorMap, ZoneDetails, LiveDay, Missions, and Collection components" />
+            <FloorMap upgrades={upgrades} interactive selectedZoneId={selectedZone?.id} onZoneClick={setSelectedZone} title="Clean Floor Map" subtitle="Open Live Day to sell stock and naturally discover collectible comics" />
             <div className="grid gap-2 sm:grid-cols-3">
               <button onClick={() => handleRestock("new", 8)} className="rounded-2xl bg-white p-4 text-left font-black shadow-sm ring-1 ring-black/5 active:scale-[.99]">📚 Restock New<br /><span className="text-xs text-slate-500">Stock: {stockFor(save, "new")}</span></button>
               <button onClick={() => handleRestock("manga", 8)} className="rounded-2xl bg-white p-4 text-left font-black shadow-sm ring-1 ring-black/5 active:scale-[.99]">🌸 Restock Manga<br /><span className="text-xs text-slate-500">Stock: {stockFor(save, "manga")}</span></button>
@@ -429,9 +447,8 @@ export default function CleanGame() {
           <aside className="space-y-4">
             <SectionCard eyebrow="Clean Build" title="Quick Actions">
               <div className="grid gap-2">
-                <div className="rounded-2xl bg-amber-50 p-3 text-xs font-bold text-amber-950 ring-1 ring-amber-100">Use the main <b>Open</b> button in the header to run Live Day. Rare books are now best found through Live Day and collector upgrades.</div>
-                <button onClick={handleFindComic} className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white active:scale-[.99]">🔎 Scout Comic — $75</button>
-                <button onClick={() => setCollectionOpen(true)} className="rounded-2xl bg-slate-100 px-4 py-3 text-sm font-black text-slate-700 active:scale-[.99]">📚 Collection</button>
+                <div className="rounded-2xl bg-amber-50 p-3 text-xs font-bold text-amber-950 ring-1 ring-amber-100">Use <b>Open</b> to run Live Day. Collectibles now appear naturally from customer trade-ins, longboxes, the Rare Case, traffic, and reputation.</div>
+                <button onClick={() => setCollectionOpen(true)} className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white active:scale-[.99]">📚 Collection</button>
                 <button onClick={() => setMissionsOpen(true)} className="rounded-2xl bg-slate-100 px-4 py-3 text-sm font-black text-slate-700 active:scale-[.99]">🎯 Missions</button>
               </div>
             </SectionCard>
