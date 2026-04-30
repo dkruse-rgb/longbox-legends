@@ -325,8 +325,9 @@ export default function CleanGame() {
   }
 
   function handleFindComic() {
-    findComicForCollection("CleanGame Search");
+    const result = findComicForCollection("Paid Scout Search");
     setLocalSave(getSave() || save);
+    if (!result?.ok) return;
   }
 
   function handleNav(id) {
@@ -382,8 +383,8 @@ export default function CleanGame() {
           <aside className="space-y-4">
             <SectionCard eyebrow="Clean Build" title="Quick Actions">
               <div className="grid gap-2">
-                <div className="rounded-2xl bg-amber-50 p-3 text-xs font-bold text-amber-950 ring-1 ring-amber-100">Use the main <b>Open</b> button in the header to run Live Day.</div>
-                <button onClick={handleFindComic} className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white active:scale-[.99]">🔎 Find Comic</button>
+                <div className="rounded-2xl bg-amber-50 p-3 text-xs font-bold text-amber-950 ring-1 ring-amber-100">Use the main <b>Open</b> button in the header to run Live Day. Rare books are now best found through Live Day and collector upgrades.</div>
+                <button onClick={handleFindComic} className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white active:scale-[.99]">🔎 Scout Comic — $75</button>
                 <button onClick={() => setCollectionOpen(true)} className="rounded-2xl bg-slate-100 px-4 py-3 text-sm font-black text-slate-700 active:scale-[.99]">📚 Collection</button>
                 <button onClick={() => setMissionsOpen(true)} className="rounded-2xl bg-slate-100 px-4 py-3 text-sm font-black text-slate-700 active:scale-[.99]">🎯 Missions</button>
               </div>
