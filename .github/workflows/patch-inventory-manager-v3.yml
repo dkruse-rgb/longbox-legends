@@ -1,0 +1,101 @@
+name: Patch Inventory Manager V3
+
+on:
+  push:
+    paths:
+      - ".patch-inventory-manager-v3-trigger"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Merge pricing and buying into one Inventory Manager
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path('src/CleanGame.jsx')
+          content = path.read_text()
+
+          inventory_manager = '''function InventoryManager({ save, onPrice, onBuy }) {
+  const items = uniqueCatalogItems();
+  return <SectionCard eyebrow="Inventory Manager" title="Buy Stock & Set Prices">
+    <p className="mb-4 text-sm font-semibold text-slate-500">Manage each section in one place: stock level, base price, pricing strategy, and restock button.</p>
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      {items.map(item => {
+        const active = getPricingId(save, item.id);
+        const activeTier = PRICING_TIERS[active];
+        const amount = item.id === "figures" ? 4 : item.id === "cards" ? 12 : 8;
+        const cost = amount * Math.max(4, Math.ceil((item.price || 8) * 0.72));
+        const currentStock = stockFor(save, item.id);
+        return <div key={item.id} className="rounded-[1.5rem] bg-slate-50 p-4 shadow-sm ring-1 ring-black/5">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <div className="text-3xl">{item.icon}</div>
+              <h3 className="mt-2 text-lg font-black leading-tight">{item.name}</h3>
+              <div className="mt-1 text-xs font-bold text-slate-500">Current: {activeTier.icon} {activeTier.label}</div>
+            </div>
+            <div className="grid gap-1 text-right">
+              <div className="rounded-full bg-white px-2.5 py-1 text-xs font-black text-slate-600 ring-1 ring-black/5">Stock: {currentStock}</div>
+              <div className="rounded-full bg-white px-2.5 py-1 text-xs font-black text-slate-600 ring-1 ring-black/5">Base ${item.price}</div>
+            </div>
+          </div>
+
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            {Object.entries(PRICING_TIERS).map(([tierId, tier]) => <button
+              key={tierId}
+              onClick={() => onPrice(item.id, tierId)}
+              className={`rounded-2xl px-2 py-2 text-xs font-black ring-1 active:scale-95 ${active === tierId ? "bg-slate-950 text-white ring-slate-950" : "bg-white text-slate-700 ring-black/5"}`}
+            >
+              <div>{tier.icon} {tier.label}</div>
+              <div className={`mt-0.5 text-[10px] ${active === tierId ? "text-slate-300" : "text-slate-400"}`}>{Math.round(tier.price * 100)}% price</div>
+            </button>)}
+          </div>
+
+          <div className="mt-3 rounded-2xl bg-white p-3 text-xs font-bold text-slate-500 ring-1 ring-black/5">{activeTier.desc}</div>
+
+          <button onClick={() => onBuy(item.id, amount)} className="mt-3 w-full rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white active:scale-[.99]">
+            Buy {amount} for ${cost}
+          </button>
+        </div>;
+      })}
+    </div>
+  </SectionCard>;
+}
+'''
+
+          start = content.find('function PricingPanel')
+          end = content.find('function BuildMarket')
+          if start == -1 or end == -1 or end <= start:
+            raise SystemExit('Could not find PricingPanel -> BuildMarket block')
+          content = content[:start] + inventory_manager + '\n' + content[end:]
+
+          buy_start = content.find('{activeTab === "buy"')
+          build_start = content.find('{activeTab === "build"', buy_start)
+          if buy_start == -1 or build_start == -1 or build_start <= buy_start:
+            raise SystemExit('Could not find Buy tab render block')
+          replacement = '{activeTab === "buy" && <InventoryManager save={save} onPrice={handlePrice} onBuy={handleRestock} />}\n        '
+          content = content[:buy_start] + replacement + content[build_start:]
+
+          if 'function PricingPanel' in content or 'function BuyMarket' in content or '<PricingPanel' in content or '<BuyMarket' in content:
+            raise SystemExit('Old pricing/buy code still present')
+
+          path.write_text(content)
+          print('Inventory Manager patch applied.')
+          PY
+
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/CleanGame.jsx
+          git commit -m "Merge buy tab inventory controls" || exit 0
+          git push
