@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from "react";
 import FloorMap from "./FloorMap";
+import ZoneDetails from "./ZoneDetails";
 import { getSave, getUpgrades } from "../game/save";
 import { SHOP_ZONES } from "../game/catalog";
 
@@ -17,8 +18,8 @@ export default function FloorMapDemo() {
     <div className="mx-auto max-w-4xl">
       <div className="mb-4 rounded-[2rem] bg-slate-950 p-5 text-white shadow-xl">
         <div className="text-xs font-black uppercase tracking-widest text-amber-300">Component Demo</div>
-        <h1 className="mt-1 text-3xl font-black">Reusable FloorMap</h1>
-        <p className="mt-2 text-sm font-semibold text-slate-300">This is the extracted floor-map component. The current playable game still uses the compatibility stack, but new features can now build on this clean component.</p>
+        <h1 className="mt-1 text-3xl font-black">Reusable FloorMap + ZoneDetails</h1>
+        <p className="mt-2 text-sm font-semibold text-slate-300">This demo uses the extracted floor-map and zone-detail components together. The current playable game still uses the compatibility stack while we migrate safely.</p>
       </div>
 
       <FloorMap
@@ -29,14 +30,10 @@ export default function FloorMapDemo() {
         selectedZoneId={selected?.id}
         onZoneClick={setSelected}
         title="Extracted Floor Map"
-        subtitle="Reusable component for static shop view and Live Day"
+        subtitle="Tap a zone to open the reusable ZoneDetails modal"
       />
 
-      {selected && <div className="mt-4 rounded-[1.5rem] bg-white p-4 shadow-sm ring-1 ring-black/5">
-        <div className="text-xs font-black uppercase tracking-widest text-amber-600">Selected Zone</div>
-        <h2 className="mt-1 text-2xl font-black">{selected.icon} {selected.title}</h2>
-        <p className="mt-1 text-sm font-semibold text-slate-600">{selected.role}</p>
-      </div>}
+      <ZoneDetails zone={selected} save={save} open={!!selected} onClose={() => setSelected(null)} />
     </div>
   </div>;
 }
