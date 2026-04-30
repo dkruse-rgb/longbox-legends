@@ -9,7 +9,7 @@ import { getTrend, INVENTORY_CATALOG, isNewComicDay, UPGRADE_NAMES } from "./gam
 import { rollNaturalComicFinds } from "./game/comics";
 import { getSave, getUpgrades, setSave, stockFor, totalStock } from "./game/save";
 
-const ECONOMY_VERSION = 3;
+const ECONOMY_VERSION = 4;
 
 const START_SAVE = {
   economyVersion: ECONOMY_VERSION,
@@ -78,19 +78,21 @@ function normalizeSave(raw) {
   const keptComics = sortedComics.slice(0, 18);
   const archivedCount = Math.max(0, sortedComics.length - keptComics.length);
   const archivedValue = sortedComics.slice(18).reduce((sum, comic) => sum + (Number(comic.value) || 0), 0);
+  const cappedCash = Math.min(Number(raw.cash) || 0, cashCapFor(raw));
+  const cappedRep = Math.min(Number(raw.rep) || 0, repCapFor(raw));
 
   const next = addLog({
     ...raw,
     economyVersion: ECONOMY_VERSION,
-    cash: Math.min(Number(raw.cash) || 0, cashCapFor(raw)),
-    rep: Math.min(Number(raw.rep) || 0, repCapFor(raw)),
+    cash: cappedCash,
+    rep: cappedRep,
     comicCollection: keptComics,
     archivedComicCount: (Number(raw.archivedComicCount) || 0) + archivedCount,
     archivedComicValue: (Number(raw.archivedComicValue) || 0) + archivedValue,
     comicScoutsUsed: 0
   }, archivedCount > 0
-    ? `Economy balanced: archived ${archivedCount} extra comics as legacy collection history.`
-    : "Economy balanced. Collectibles now appear naturally during Live Day."
+    ? `Economy balanced: archived ${archivedCount} extra comics and normalized old inventory.`
+    : "Economy balanced: old inventory and cash were normalized."
   );
   setSave(next);
   return next;
@@ -267,10 +269,11 @@ function MiniDark({ label, value }) {
 }
 
 function BuyMarket({ save, onBuy }) {
+  const uniqueItems = Object.values(INVENTORY_CATALOG).filter((item, index, list) => list.findIndex(candidate => candidate.id === item.id) === index);
   return <SectionCard eyebrow="Distributor Market" title="Buy Stock">
     <p className="mb-4 text-sm font-semibold text-slate-500">Stock what your regulars want. Empty shelves are where reputation goes to die.</p>
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-      {Object.values(INVENTORY_CATALOG).map(item => {
+      {uniqueItems.map(item => {
         const amount = item.id === "figures" ? 4 : item.id === "cards" ? 12 : 8;
         const cost = amount * Math.max(4, Math.ceil((item.price || 8) * 0.72));
         return <button key={item.id} onClick={() => onBuy(item.id, amount)} className="rounded-[1.5rem] bg-slate-50 p-4 text-left shadow-sm ring-1 ring-black/5 active:scale-[.99]">
@@ -445,13 +448,6 @@ export default function CleanGame() {
           </div>
 
           <aside className="space-y-4">
-            <SectionCard eyebrow="Clean Build" title="Quick Actions">
-              <div className="grid gap-2">
-                <div className="rounded-2xl bg-amber-50 p-3 text-xs font-bold text-amber-950 ring-1 ring-amber-100">Use <b>Open</b> to run Live Day. Collectibles now appear naturally from customer trade-ins, longboxes, the Rare Case, traffic, and reputation.</div>
-                <button onClick={() => setCollectionOpen(true)} className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-black text-white active:scale-[.99]">📚 Collection</button>
-                <button onClick={() => setMissionsOpen(true)} className="rounded-2xl bg-slate-100 px-4 py-3 text-sm font-black text-slate-700 active:scale-[.99]">🎯 Missions</button>
-              </div>
-            </SectionCard>
             <ShopFeed save={save} />
           </aside>
         </div>}
