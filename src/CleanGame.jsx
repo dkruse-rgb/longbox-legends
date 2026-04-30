@@ -9,7 +9,47 @@ import { getTrend, INVENTORY_CATALOG, isNewComicDay, UPGRADE_NAMES } from "./gam
 import { rollNaturalComicFinds } from "./game/comics";
 import { getSave, getUpgrades, setSave, stockFor, totalStock } from "./game/save";
 
-const ECONOMY_VERSION = 4;
+const ECONOMY_VERSION = 5;
+
+const PRICING_TIERS = {
+  cheap: {
+    label: "Cheap",
+    icon: "🏷️",
+    price: 0.85,
+    demand: 1.22,
+    desc: "Moves stock fast. Lower profit, friendlier vibe."
+  },
+  fair: {
+    label: "Fair",
+    icon: "⚖️",
+    price: 1,
+    demand: 1,
+    desc: "Normal prices. Reliable sales and no drama."
+  },
+  premium: {
+    label: "Premium",
+    icon: "💵",
+    price: 1.22,
+    demand: 0.78,
+    desc: "Better margin. More customers may pass."
+  },
+  collector: {
+    label: "Collector",
+    icon: "💎",
+    price: 1.48,
+    demand: 0.58,
+    desc: "Big markup. Best with rep, trends, and collector upgrades."
+  }
+};
+
+const DEFAULT_PRICING = {
+  new: "fair",
+  manga: "fair",
+  cards: "fair",
+  back: "fair",
+  figures: "fair",
+  zines: "fair"
+};
 
 const START_SAVE = {
   economyVersion: ECONOMY_VERSION,
@@ -24,6 +64,7 @@ const START_SAVE = {
   upgrades: [],
   pullList: [],
   comicCollection: [],
+  priceStrategy: DEFAULT_PRICING,
   lifetimeSales: 0,
   lifetimeVisitors: 0,
   fulfilledPulls: 0,
@@ -55,6 +96,35 @@ function addLog(save, line) {
   return { ...save, log: [line, ...(Array.isArray(save.log) ? save.log : [])].slice(0, 10) };
 }
 
+function uniqueCatalogItems() {
+  return Object.values(INVENTORY_CATALOG).filter((item, index, list) => list.findIndex(candidate => candidate.id === item.id) === index);
+}
+
+function getPricing(save) {
+  return { ...DEFAULT_PRICING, ...(save?.priceStrategy || {}) };
+}
+
+function getPricingTier(save, itemId) {
+  const pricing = getPricing(save);
+  return PRICING_TIERS[pricing[itemId]] || PRICING_TIERS.fair;
+}
+
+function getPricingId(save, itemId) {
+  const pricing = getPricing(save);
+  return PRICING_TIERS[pricing[itemId]] ? pricing[itemId] : "fair";
+}
+
+function weightedPick(items, getWeight) {
+  const total = items.reduce((sum, item) => sum + Math.max(0, getWeight(item)), 0);
+  if (total <= 0) return items[0];
+  let roll = Math.random() * total;
+  for (const item of items) {
+    roll -= Math.max(0, getWeight(item));
+    if (roll <= 0) return item;
+  }
+  return items[items.length - 1];
+}
+
 function repCapFor(save) {
   const day = Number(save?.day) || 1;
   const upgrades = getUpgrades(save).length;
@@ -70,7 +140,7 @@ function cashCapFor(save) {
 
 function normalizeSave(raw) {
   if (!raw) return START_SAVE;
-  if (raw.economyVersion === ECONOMY_VERSION) return raw;
+  if (raw.economyVersion === ECONOMY_VERSION && raw.priceStrategy) return raw;
 
   const sortedComics = Array.isArray(raw.comicCollection)
     ? [...raw.comicCollection].sort((a, b) => (Number(b.value) || 0) - (Number(a.value) || 0))
@@ -89,10 +159,11 @@ function normalizeSave(raw) {
     comicCollection: keptComics,
     archivedComicCount: (Number(raw.archivedComicCount) || 0) + archivedCount,
     archivedComicValue: (Number(raw.archivedComicValue) || 0) + archivedValue,
-    comicScoutsUsed: 0
+    comicScoutsUsed: 0,
+    priceStrategy: getPricing(raw)
   }, archivedCount > 0
-    ? `Economy balanced: archived ${archivedCount} extra comics and normalized old inventory.`
-    : "Economy balanced: old inventory and cash were normalized."
+    ? `Economy balanced: archived ${archivedCount} extra comics and added pricing controls.`
+    : "Pricing controls added. Stock now reacts to cheap, fair, premium, and collector pricing."
   );
   setSave(next);
   return next;
@@ -118,6 +189,22 @@ function operatingExpense(save, traffic) {
   return Math.round(42 + upgrades * 18 + Math.floor(stock / 14) * 4 + Math.floor(traffic / 6) * 6);
 }
 
+function demandForItem(save, item, trend) {
+  const tier = getPricingTier(save, item.id);
+  const tierId = getPricingId(save, item.id);
+  const upgrades = getUpgrades(save);
+  const rep = Number(save.rep) || 0;
+  let demand = tier.demand;
+
+  if (item.id === trend.itemId) demand += 0.18;
+  if (tierId === "collector" && (upgrades.includes("case") || rep >= 55)) demand += 0.16;
+  if (tierId === "collector" && item.id === "back" && upgrades.includes("wall")) demand += 0.1;
+  if (tierId === "premium" && rep >= 45) demand += 0.06;
+  if (tierId === "cheap") demand += 0.04;
+
+  return Math.max(0.22, Math.min(1.45, demand));
+}
+
 function runSimpleDay(save) {
   const inventory = Array.isArray(save.inventory) ? save.inventory.map(item => ({ ...item })) : [];
   const traffic = estimateTraffic(save);
@@ -125,6 +212,9 @@ function runSimpleDay(save) {
   const foundComics = rollNaturalComicFinds(save, traffic);
   let gross = 0;
   let sales = 0;
+  let skipped = 0;
+  let cheapSales = 0;
+  let priceySkips = 0;
   let trendSales = 0;
   const lines = [];
 
@@ -134,15 +224,32 @@ function runSimpleDay(save) {
       if (lines.length < 4) lines.push("A customer found empty shelves and left quietly. Rude, but fair.");
       break;
     }
-    const item = available[Math.floor(Math.random() * available.length)];
+
+    const item = weightedPick(available, candidate => {
+      const stockWeight = Math.min(3, Math.max(0.6, (Number(candidate.stock) || 0) / 10));
+      return stockWeight * demandForItem(save, candidate, trend);
+    });
+
+    const tier = getPricingTier(save, item.id);
+    const tierId = getPricingId(save, item.id);
+    const buyChance = Math.max(0.25, Math.min(0.96, 0.78 * demandForItem(save, item, trend) + Math.min(0.08, (Number(save.rep) || 0) / 900)));
+
+    if (Math.random() > buyChance) {
+      skipped += 1;
+      if (["premium", "collector"].includes(tierId)) priceySkips += 1;
+      if (lines.length < 4) lines.push(`${item.icon || "📦"} A customer passed on ${item.name} at ${tier.label} pricing.`);
+      continue;
+    }
+
     item.stock -= 1;
     const isTrendSale = item.id === trend.itemId;
     const trendBonus = isTrendSale ? 1.35 : 1;
-    const price = Math.round((item.price || 8) * trendBonus * (1 + Math.min(Number(save.rep) || 0, 80) / 360));
+    const price = Math.max(1, Math.round((item.price || 8) * tier.price * trendBonus * (1 + Math.min(Number(save.rep) || 0, 80) / 380)));
     gross += price;
     sales += 1;
+    if (tierId === "cheap") cheapSales += 1;
     if (isTrendSale) trendSales += 1;
-    if (lines.length < 4) lines.push(`${item.icon || "📦"} Sold ${item.name} for $${price}${isTrendSale ? " — trend boosted" : ""}.`);
+    if (lines.length < 4) lines.push(`${item.icon || "📦"} Sold ${item.name} for $${price}${isTrendSale ? " — trend boosted" : ""}${tierId !== "fair" ? ` (${tier.label})` : ""}.`);
   }
 
   foundComics.forEach(comic => {
@@ -153,20 +260,25 @@ function runSimpleDay(save) {
   const net = gross - expenses;
   const repChange = sales >= Math.ceil(traffic * 0.72) ? 1 : 0;
   const findRepBonus = foundComics.length ? 1 : 0;
+  const priceRepBonus = cheapSales >= 4 ? 1 : 0;
+  const priceRepPenalty = priceySkips >= 4 ? 1 : 0;
+  const totalRepChange = repChange + findRepBonus + priceRepBonus - priceRepPenalty;
   const day = Number(save.day) || 1;
   const next = addLog({
     ...save,
     economyVersion: ECONOMY_VERSION,
     day: day + 1,
     cash: Math.max(0, (Number(save.cash) || 0) + net),
-    rep: Math.min(repCapFor(save), Math.max(0, (Number(save.rep) || 0) + repChange + findRepBonus)),
+    rep: Math.min(repCapFor(save), Math.max(0, (Number(save.rep) || 0) + totalRepChange)),
     inventory,
+    priceStrategy: getPricing(save),
     comicCollection: [...foundComics, ...(Array.isArray(save.comicCollection) ? save.comicCollection : [])].slice(0, 100),
     naturalFinds: (Number(save.naturalFinds) || 0) + foundComics.length,
     trendWins: (Number(save.trendWins) || 0) + trendSales,
     lifetimeSales: (Number(save.lifetimeSales) || 0) + gross,
-    lifetimeVisitors: (Number(save.lifetimeVisitors) || 0) + traffic
-  }, `Day ${day}: ${traffic} visitors, ${sales} sales, ${trendSales} trend, ${foundComics.length} finds, $${gross.toLocaleString()} gross, $${net.toLocaleString()} net.`);
+    lifetimeVisitors: (Number(save.lifetimeVisitors) || 0) + traffic,
+    lifetimeSkipped: (Number(save.lifetimeSkipped) || 0) + skipped
+  }, `Day ${day}: ${traffic} visitors, ${sales} sales, ${skipped} skipped, ${trendSales} trend, ${foundComics.length} finds, $${gross.toLocaleString()} gross, $${net.toLocaleString()} net.`);
 
   setSave(next);
   if (foundComics.length) {
@@ -180,13 +292,15 @@ function runSimpleDay(save) {
       headline: foundComics.length ? "Collector magic hit the floor" : net >= 0 ? "Solid day behind the counter" : "Good traffic, thin wallet",
       visitors: traffic,
       sales,
+      skipped,
+      priceySkips,
       trendSales,
       trend,
       gross,
       rent: expenses,
       expenses,
       net,
-      repChange: repChange + findRepBonus,
+      repChange: totalRepChange,
       foundComics,
       lines
     }
@@ -205,6 +319,17 @@ function restock(save, itemId, amount = 8) {
   else inventory.push({ ...item, stock: amount, tags: item.tags || [] });
 
   const next = addLog({ ...save, cash: (Number(save.cash) || 0) - cost, inventory }, `Restocked ${amount}x ${item.name} for $${cost}.`);
+  setSave(next);
+  return next;
+}
+
+function setItemPricing(save, itemId, tierId) {
+  const item = INVENTORY_CATALOG[itemId];
+  const tier = PRICING_TIERS[tierId] || PRICING_TIERS.fair;
+  const next = addLog({
+    ...save,
+    priceStrategy: { ...getPricing(save), [itemId]: tierId }
+  }, `${item?.name || itemId} pricing set to ${tier.label}.`);
   setSave(next);
   return next;
 }
@@ -268,8 +393,41 @@ function MiniDark({ label, value }) {
   </div>;
 }
 
+function PricingPanel({ save, onPrice }) {
+  const items = uniqueCatalogItems();
+  return <SectionCard eyebrow="Pricing Strategy" title="Set Prices">
+    <p className="mb-4 text-sm font-semibold text-slate-500">Choose a simple pricing stance per section. Premium and Collector can earn more, but customers may walk if the shop feels greedy.</p>
+    <div className="grid gap-3">
+      {items.map(item => {
+        const active = getPricingId(save, item.id);
+        const activeTier = PRICING_TIERS[active];
+        return <div key={item.id} className="rounded-[1.5rem] bg-slate-50 p-4 ring-1 ring-black/5">
+          <div className="mb-3 flex items-start justify-between gap-3">
+            <div>
+              <div className="text-lg font-black">{item.icon} {item.name}</div>
+              <div className="text-xs font-bold text-slate-500">Current: {activeTier.icon} {activeTier.label} · Stock: {stockFor(save, item.id)}</div>
+            </div>
+            <div className="rounded-full bg-white px-3 py-1 text-xs font-black text-slate-600 ring-1 ring-black/5">Base ${item.price}</div>
+          </div>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {Object.entries(PRICING_TIERS).map(([tierId, tier]) => <button
+              key={tierId}
+              onClick={() => onPrice(item.id, tierId)}
+              className={`rounded-2xl px-2 py-2 text-xs font-black ring-1 active:scale-95 ${active === tierId ? "bg-slate-950 text-white ring-slate-950" : "bg-white text-slate-700 ring-black/5"}`}
+            >
+              <div>{tier.icon} {tier.label}</div>
+              <div className={`mt-0.5 text-[10px] ${active === tierId ? "text-slate-300" : "text-slate-400"}`}>{Math.round(tier.price * 100)}% price</div>
+            </button>)}
+          </div>
+          <div className="mt-3 rounded-2xl bg-white p-3 text-xs font-bold text-slate-500 ring-1 ring-black/5">{activeTier.desc}</div>
+        </div>;
+      })}
+    </div>
+  </SectionCard>;
+}
+
 function BuyMarket({ save, onBuy }) {
-  const uniqueItems = Object.values(INVENTORY_CATALOG).filter((item, index, list) => list.findIndex(candidate => candidate.id === item.id) === index);
+  const uniqueItems = uniqueCatalogItems();
   return <SectionCard eyebrow="Distributor Market" title="Buy Stock">
     <p className="mb-4 text-sm font-semibold text-slate-500">Stock what your regulars want. Empty shelves are where reputation goes to die.</p>
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
@@ -282,7 +440,7 @@ function BuyMarket({ save, onBuy }) {
             <div className="rounded-full bg-white px-2.5 py-1 text-xs font-black text-slate-600 ring-1 ring-black/5">Stock: {stockFor(save, item.id)}</div>
           </div>
           <div className="mt-3 text-lg font-black">{item.name}</div>
-          <div className="mt-1 text-sm font-semibold text-slate-500">Buy {amount} for ${cost}. Sells around ${item.price} each.</div>
+          <div className="mt-1 text-sm font-semibold text-slate-500">Buy {amount} for ${cost}. Base sale ${item.price}; pricing strategy changes final sale price.</div>
           <div className="mt-3 rounded-xl bg-slate-950 px-3 py-2 text-center text-xs font-black text-white">Buy Stock</div>
         </button>;
       })}
@@ -344,13 +502,15 @@ function DayReport({ report, onClose }) {
           </div>
         </div>)}
       </div>}
-      <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-5">
+      <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-6">
         <Mini label="Visitors" value={report.visitors} />
         <Mini label="Sales" value={report.sales} />
+        <Mini label="Skipped" value={report.skipped || 0} />
         <Mini label="Trend" value={report.trendSales} />
         <Mini label="Gross" value={`$${report.gross}`} />
         <Mini label="Net" value={`$${report.net}`} hot={report.net >= 0} />
       </div>
+      {report.priceySkips >= 4 && <div className="mt-4 rounded-2xl bg-rose-50 p-3 text-sm font-bold text-rose-800 ring-1 ring-rose-100">Pricing note: customers pushed back on premium/collector pricing today.</div>}
       <div className="mt-4 rounded-2xl bg-slate-50 p-3 text-sm font-bold text-slate-700 ring-1 ring-black/5">Operating expenses: ${report.expenses ?? report.rent}</div>
       <div className="mt-4 space-y-2">
         {report.lines.length ? report.lines.map((line, index) => <div key={`${line}-${index}`} className="rounded-2xl bg-slate-50 p-3 text-sm font-bold text-slate-700 ring-1 ring-black/5">{line}</div>) : <div className="rounded-2xl bg-slate-50 p-3 text-sm font-bold text-slate-700 ring-1 ring-black/5">No standout notes today. The register survived.</div>}
@@ -429,6 +589,10 @@ export default function CleanGame() {
     setLocalSave(restock(getSave() || save, itemId, amount));
   }
 
+  function handlePrice(itemId, tierId) {
+    setLocalSave(setItemPricing(getSave() || save, itemId, tierId));
+  }
+
   function handleBuild(id) {
     setLocalSave(buildUpgrade(getSave() || save, id));
   }
@@ -452,7 +616,7 @@ export default function CleanGame() {
           </aside>
         </div>}
 
-        {activeTab === "buy" && <BuyMarket save={save} onBuy={handleRestock} />}
+        {activeTab === "buy" && <div className="space-y-4"><PricingPanel save={save} onPrice={handlePrice} /><BuyMarket save={save} onBuy={handleRestock} /></div>}
         {activeTab === "build" && <BuildMarket save={save} upgrades={upgrades} onBuild={handleBuild} />}
       </div>
 
