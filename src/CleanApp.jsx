@@ -83,6 +83,48 @@ function mergeBuyTabControls() {
   buySection.setAttribute("data-longbox-hidden-buy-section", "true");
 }
 
+function estimateTraffic(save) {
+  const day = Number(save?.day) || 1;
+  const upgrades = getUpgrades(save).length;
+  const rep = Number(save?.rep) || 0;
+  return Math.min(26, 4 + Math.floor(rep / 18) + upgrades + Math.floor(day / 7));
+}
+
+function estimateExpense(save, traffic) {
+  const upgrades = getUpgrades(save).length;
+  const stock = totalStock(save);
+  return Math.round(42 + upgrades * 18 + Math.floor(stock / 14) * 4 + Math.floor(traffic / 6) * 6);
+}
+
+function collectibleOutlook(save) {
+  const upgrades = getUpgrades(save);
+  const rep = Number(save?.rep) || 0;
+  let score = 1;
+  if (upgrades.includes("wall")) score += 1;
+  if (upgrades.includes("case")) score += 2;
+  if (rep >= 35) score += 1;
+  if (rep >= 60) score += 1;
+  if (score >= 5) return { label: "Strong", detail: "Collector upgrades and rep are helping rare finds." };
+  if (score >= 3) return { label: "Decent", detail: "You have some collector energy. Rare Case would improve it." };
+  return { label: "Low", detail: "Build Longbox Wall or Rare Case to make finds feel more likely." };
+}
+
+function pricingRisk(save) {
+  const pricing = save?.priceStrategy || {};
+  const rep = Number(save?.rep) || 0;
+  const premiumCount = Object.values(pricing).filter(value => ["premium", "collector"].includes(value)).length;
+  if (premiumCount >= 3 && rep < 45) return { label: "High", detail: "Several sections are priced high for your current rep." };
+  if (premiumCount >= 2) return { label: "Medium", detail: "Good margins, but watch skipped customers in the report." };
+  return { label: "Low", detail: "Pricing should not scare off many customers." };
+}
+
+function stockHealth(save) {
+  const stock = totalStock(save);
+  if (stock < 20) return { label: "Thin", detail: `${stock} total stock. Restock before opening.` };
+  if (stock < 45) return { label: "Okay", detail: `${stock} total stock. Enough to open, but watch trends.` };
+  return { label: "Healthy", detail: `${stock} total stock. Shelves can handle traffic.` };
+}
+
 function buildTodayPlan(save) {
   if (!save) {
     return [
@@ -164,6 +206,14 @@ function buildTodayPlan(save) {
   return ideas.slice(0, 3);
 }
 
+function PreviewStat({ label, value, detail, hot = false, warn = false }) {
+  return <div className={`${hot ? "bg-slate-950 text-white" : warn ? "bg-amber-50 text-amber-950 ring-amber-100" : "bg-slate-50 text-slate-950"} rounded-2xl p-3 ring-1 ring-black/5`}>
+    <div className={`text-[10px] font-black uppercase tracking-wide ${hot ? "text-amber-300" : warn ? "text-amber-700" : "text-slate-500"}`}>{label}</div>
+    <div className="mt-1 text-lg font-black">{value}</div>
+    {detail && <div className={`mt-1 text-xs font-semibold ${hot ? "text-slate-300" : warn ? "text-amber-800" : "text-slate-500"}`}>{detail}</div>}
+  </div>;
+}
+
 function TodayPlan() {
   const [save, setSaveState] = useState(() => getSave());
 
@@ -183,6 +233,14 @@ function TodayPlan() {
   }, []);
 
   const ideas = useMemo(() => buildTodayPlan(save), [save]);
+  const traffic = estimateTraffic(save);
+  const expense = estimateExpense(save, traffic);
+  const stock = stockHealth(save);
+  const risk = pricingRisk(save);
+  const finds = collectibleOutlook(save);
+  const trend = getTrend(Number(save?.day) || 1);
+  const trendItem = INVENTORY_CATALOG[trend.itemId];
+  const trendStock = stockFor(save, trend.itemId);
 
   return <div className="bg-[#f6efe3] px-3 pt-3 text-slate-950 lg:px-6 lg:pt-6">
     <section className="mx-auto max-w-7xl rounded-[1.75rem] bg-white p-4 shadow-sm ring-1 ring-black/5">
@@ -203,6 +261,26 @@ function TodayPlan() {
             </div>
           </div>
         </div>)}
+      </div>
+
+      <div className="mt-4 border-t border-black/5 pt-4">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <div className="text-xs font-black uppercase tracking-widest text-slate-500">Open Day Preview</div>
+            <h3 className="mt-1 text-lg font-black">Ready check before opening</h3>
+          </div>
+          <div className="rounded-full bg-amber-100 px-3 py-1 text-xs font-black text-amber-900">{trend.icon} {trend.name}</div>
+        </div>
+        <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+          <PreviewStat label="Traffic" value={traffic} detail="expected visitors" hot />
+          <PreviewStat label="Expense" value={`$${expense}`} detail="estimated overhead" />
+          <PreviewStat label="Stock" value={stock.label} detail={stock.detail} warn={stock.label === "Thin"} />
+          <PreviewStat label="Pricing Risk" value={risk.label} detail={risk.detail} warn={risk.label === "High"} />
+          <PreviewStat label="Find Odds" value={finds.label} detail={finds.detail} />
+        </div>
+        {trendItem && <div className="mt-3 rounded-2xl bg-slate-50 p-3 text-sm font-bold text-slate-600 ring-1 ring-black/5">
+          Trend opportunity: <span className="text-slate-950">{trendItem.name}</span> has {trendStock} in stock and sells with the weekly trend bonus.
+        </div>}
       </div>
     </section>
   </div>;
