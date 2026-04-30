@@ -1,11 +1,7 @@
 import React, { useMemo } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { addLog, getCollection, getSave, setSave } from "../game/save";
-import { addComicToCollection, collectionStats, makeComic, RARITY_COLORS, SCOUT_RARITY_WEIGHTS } from "../game/comics";
-
-export const SCOUT_COST = 75;
-export const SCOUTS_PER_DAY = 2;
-export const SCOUT_SUCCESS_RATE = 0.45;
+import { collectionStats, RARITY_COLORS } from "../game/comics";
 
 function sellComic(uid) {
   const save = getSave() || {};
@@ -41,51 +37,6 @@ function toggleDisplayComic(uid) {
 
   setSave(next);
   window.dispatchEvent(new CustomEvent("longbox-collection-changed"));
-}
-
-export function getScoutState(save = getSave()) {
-  const day = Number(save?.day) || 1;
-  const scoutDay = Number(save?.comicScoutDay) || day;
-  const used = scoutDay === day ? Number(save?.comicScoutsUsed) || 0 : 0;
-  return { day, used, remaining: Math.max(0, SCOUTS_PER_DAY - used), cost: SCOUT_COST };
-}
-
-export function findComicForCollection(source = "Scout Search") {
-  const save = getSave() || {};
-  const state = getScoutState(save);
-
-  if (state.remaining <= 0) {
-    const next = addLog(save, `Scout search unavailable: ${SCOUTS_PER_DAY} searches already used today.`);
-    setSave(next);
-    window.dispatchEvent(new CustomEvent("longbox-collection-changed", { detail: { failed: "No searches left today." } }));
-    return { ok: false, reason: "No searches left today." };
-  }
-
-  if ((Number(save.cash) || 0) < SCOUT_COST) {
-    const next = addLog(save, `Scout search costs $${SCOUT_COST}. Not enough cash.`);
-    setSave(next);
-    window.dispatchEvent(new CustomEvent("longbox-collection-changed", { detail: { failed: "Not enough cash." } }));
-    return { ok: false, reason: "Not enough cash." };
-  }
-
-  const chargedSave = {
-    ...save,
-    cash: (Number(save.cash) || 0) - SCOUT_COST,
-    comicScoutDay: state.day,
-    comicScoutsUsed: state.used + 1
-  };
-
-  if (Math.random() > SCOUT_SUCCESS_RATE) {
-    const next = addLog(chargedSave, `Scout search spent $${SCOUT_COST}, but only found water-damaged dollar-bin sadness.`);
-    setSave(next);
-    window.dispatchEvent(new CustomEvent("longbox-collection-changed", { detail: { failed: "No collectible found." } }));
-    return { ok: false, reason: "No collectible found." };
-  }
-
-  setSave(chargedSave);
-  const comic = makeComic(state.day, source, SCOUT_RARITY_WEIGHTS);
-  addComicToCollection(comic);
-  return { ok: true, comic };
 }
 
 function Stat({ label, value, small = false }) {
@@ -134,7 +85,6 @@ export default function CollectionModal({ open, onClose, save = getSave(), onCha
   const owned = useMemo(() => getCollection(save), [save]);
   const stats = useMemo(() => collectionStats(owned), [owned]);
   const sorted = useMemo(() => [...owned].sort((a, b) => Number(b.displayed) - Number(a.displayed) || (Number(b.value) || 0) - (Number(a.value) || 0)), [owned]);
-  const scout = getScoutState(save);
 
   return <AnimatePresence>
     {open && <motion.div
@@ -155,7 +105,7 @@ export default function CollectionModal({ open, onClose, save = getSave(), onCha
           <div>
             <div className="text-xs font-black uppercase tracking-widest text-amber-600">Rare Books & Weird Finds</div>
             <h2 className="mt-1 text-3xl font-black">{title}</h2>
-            <p className="mt-1 text-sm font-semibold text-slate-500">Keep comics for prestige, display them for reputation flavor, or sell them for cash.</p>
+            <p className="mt-1 text-sm font-semibold text-slate-500">Collectibles are discovered naturally during Live Day. Display them for prestige flavor, keep them as wall books, or sell them for cash.</p>
           </div>
           <button onClick={onClose} className="shrink-0 rounded-2xl bg-slate-100 px-4 py-2 text-sm font-black text-slate-700 active:scale-95">Close</button>
         </div>
@@ -168,10 +118,10 @@ export default function CollectionModal({ open, onClose, save = getSave(), onCha
         </div>
 
         <div className="mb-4 rounded-2xl bg-amber-50 p-4 text-sm font-bold text-amber-950 ring-1 ring-amber-100">
-          Scout searches cost ${SCOUT_COST}, only work {SCOUTS_PER_DAY} times per day, and are not guaranteed. Remaining today: {scout.remaining}.
+          Open the shop to discover collectibles. Longboxes, Rare Case, reputation, traffic, and weekly events improve your odds.
         </div>
 
-        {owned.length === 0 ? <div className="rounded-2xl bg-amber-50 p-5 text-sm font-bold text-amber-950 ring-1 ring-amber-100">No comics yet. Find comics through Live Day, paid scouting, or future missions.</div> : <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {owned.length === 0 ? <div className="rounded-2xl bg-amber-50 p-5 text-sm font-bold text-amber-950 ring-1 ring-amber-100">No comics yet. Open the shop and let customers, longboxes, and trade-ins surprise you.</div> : <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {sorted.map(comic => <ComicCard key={comic.uid} comic={comic} onChanged={onChanged} />)}
         </div>}
       </motion.div>
