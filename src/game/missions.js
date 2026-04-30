@@ -11,78 +11,84 @@ const STOCK_TEMPLATES = {
 
 export const MISSION_STATE_KEY = "longbox-mission-state-v1";
 
+function repCapFor(save) {
+  const day = Number(save?.day) || 1;
+  const upgrades = getUpgrades(save).length;
+  return Math.min(100, 18 + Math.floor(day * 2.2) + upgrades * 4);
+}
+
 export const TUTORIAL_MISSIONS = [
   {
     id: "first_day",
     group: "Shop Basics",
     title: "Open the Doors",
     desc: "Open the shop for at least one day.",
-    reward: "+$75 and +4 New Releases",
+    reward: "+$25 and +4 New Releases",
     check: save => (save?.day || 1) >= 2,
-    prize: { cash: 75, rep: 1, stock: { new: 4 } }
+    prize: { cash: 25, stock: { new: 4 } }
   },
   {
     id: "first_stock",
     group: "Shop Basics",
     title: "Fill the Shelves",
     desc: "Reach 20 total stock.",
-    reward: "+$100 and +5 Manga",
+    reward: "+$40 and +5 Manga",
     check: save => totalStock(save) >= 20,
-    prize: { cash: 100, stock: { manga: 5 } }
+    prize: { cash: 40, stock: { manga: 5 } }
   },
   {
     id: "pull_list_one",
     group: "Regulars",
     title: "Make a Regular Happy",
     desc: "Fill your first pull-list request.",
-    reward: "+$150 and +3 reputation",
+    reward: "+$75 and +1 reputation",
     check: save => (save?.fulfilledPulls || 0) >= 1,
-    prize: { cash: 150, rep: 3 }
+    prize: { cash: 75, rep: 1 }
   },
   {
     id: "trend_hunter",
     group: "Sales",
     title: "Ride the Trend",
     desc: "Make 5 trend sales.",
-    reward: "+$180 and +6 Card Packs",
+    reward: "+$80 and +6 Card Packs",
     check: save => (save?.trendWins || 0) >= 5,
-    prize: { cash: 180, stock: { cards: 6 } }
+    prize: { cash: 80, stock: { cards: 6 } }
   },
   {
     id: "first_upgrade",
     group: "Build",
     title: "Improve the Shop",
     desc: "Build your first upgrade.",
-    reward: "+$125 and +2 reputation",
+    reward: "+$50 and +1 reputation",
     check: save => getUpgrades(save).length >= 1,
-    prize: { cash: 125, rep: 2 }
+    prize: { cash: 50, rep: 1 }
   },
   {
     id: "fan_base",
     group: "Regulars",
     title: "Build a Fanbase",
     desc: "Reach 50 total customer loyalty.",
-    reward: "+$200 and +4 reputation",
+    reward: "+$100 and +2 reputation",
     check: save => totalLoyalty(save) >= 50,
-    prize: { cash: 200, rep: 4 }
+    prize: { cash: 100, rep: 2 }
   },
   {
     id: "debt_control",
     group: "Money",
     title: "Clean Up the Books",
     desc: "Get debt below $50 after day 8.",
-    reward: "+$250 and +5 reputation",
+    reward: "+$150 and +2 reputation",
     check: save => (save?.debt || 0) < 50 && (save?.day || 1) >= 8,
-    prize: { cash: 250, rep: 5 }
+    prize: { cash: 150, rep: 2 }
   },
   {
     id: "neighborhood_shop",
     group: "Reputation",
     title: "Neighborhood Name",
     desc: "Reach 25 reputation.",
-    reward: "+$300 and +8 Back Issues",
+    reward: "+$120 and +8 Back Issues",
     check: save => (save?.rep || 0) >= 25,
-    prize: { cash: 300, stock: { back: 8 } }
+    prize: { cash: 120, stock: { back: 8 } }
   }
 ];
 
@@ -92,45 +98,45 @@ export const COLLECTION_MISSIONS = [
     group: "Collection",
     title: "Start a Wall of Weird",
     desc: "Own 3 collectible comics.",
-    reward: "+$125 and +2 reputation",
+    reward: "+$50 and +1 reputation",
     check: save => getCollection(save).length >= 3,
-    prize: { cash: 125, rep: 2 }
+    prize: { cash: 50, rep: 1 }
   },
   {
     id: "display1",
     group: "Collection",
     title: "Showpiece",
     desc: "Display your first collectible comic.",
-    reward: "+$150 and +3 reputation",
+    reward: "+$75 and +1 reputation",
     check: save => getCollection(save).some(comic => comic.displayed),
-    prize: { cash: 150, rep: 3 }
+    prize: { cash: 75, rep: 1 }
   },
   {
     id: "rare2",
     group: "Collection",
     title: "Collector Bait",
     desc: "Own 2 Rare or Epic comics.",
-    reward: "+$225 and +4 reputation",
+    reward: "+$100 and +2 reputation",
     check: save => getCollection(save).filter(comic => ["Rare", "Epic"].includes(comic.rarity)).length >= 2,
-    prize: { cash: 225, rep: 4 }
+    prize: { cash: 100, rep: 2 }
   },
   {
     id: "value1000",
     group: "Collection",
     title: "Glass Case Energy",
     desc: "Reach $1,000 total collection value.",
-    reward: "+$300 and +5 reputation",
+    reward: "+$150 and +2 reputation",
     check: save => getCollection(save).reduce((sum, comic) => sum + (Number(comic.value) || 0), 0) >= 1000,
-    prize: { cash: 300, rep: 5 }
+    prize: { cash: 150, rep: 2 }
   },
   {
     id: "epic1",
     group: "Collection",
     title: "Wall Book Found",
     desc: "Own your first Epic comic.",
-    reward: "+$500 and +7 reputation",
+    reward: "+$250 and +3 reputation",
     check: save => getCollection(save).some(comic => comic.rarity === "Epic"),
-    prize: { cash: 500, rep: 7 }
+    prize: { cash: 250, rep: 3 }
   }
 ];
 
@@ -166,10 +172,12 @@ export function addStockReward(inventory, stockReward = {}) {
 }
 
 export function applyMissionPrize(save, prize = {}) {
+  const currentRep = Number(save?.rep) || 0;
+  const nextRep = Math.min(repCapFor(save), Math.max(0, currentRep + (prize.rep || 0)));
   return addLog({
     ...save,
     cash: Math.max(0, Number(save?.cash) || 0) + (prize.cash || 0),
-    rep: Math.min(100, Math.max(0, (Number(save?.rep) || 0) + (prize.rep || 0))),
+    rep: nextRep,
     debt: Math.max(0, (Number(save?.debt) || 0) - (prize.debtPaydown || 0)),
     inventory: addStockReward(getInventory(save), prize.stock)
   }, `Mission reward claimed${prize.cash ? `: +$${prize.cash}` : ""}${prize.rep ? `, +${prize.rep} rep` : ""}${prize.stock ? ", +inventory" : ""}.`);
