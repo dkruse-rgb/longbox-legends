@@ -54,7 +54,9 @@ export function getPullList(save = getSave()) {
 
 export function stockFor(save, itemId) {
   if (!itemId) return null;
-  return getInventory(save).find(item => item.id === itemId)?.stock || 0;
+  return getInventory(save)
+    .filter(item => item.id === itemId)
+    .reduce((sum, item) => sum + (Number(item.stock) || 0), 0);
 }
 
 export function totalStock(save = getSave()) {
