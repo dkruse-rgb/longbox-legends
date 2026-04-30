@@ -8,7 +8,10 @@ import ZoneDetails from "./components/ZoneDetails";
 import { getTrend, INVENTORY_CATALOG, isNewComicDay, UPGRADE_NAMES } from "./game/catalog";
 import { getSave, getUpgrades, setSave, stockFor, totalStock } from "./game/save";
 
+const ECONOMY_VERSION = 2;
+
 const START_SAVE = {
+  economyVersion: ECONOMY_VERSION,
   day: 1,
   cash: 650,
   rep: 12,
@@ -47,20 +50,68 @@ const NAV_ITEMS = [
   ["books", "Books", "📚"]
 ];
 
-function ensureSave() {
-  const existing = getSave();
-  if (existing) return existing;
-  setSave(START_SAVE);
-  return START_SAVE;
-}
-
 function addLog(save, line) {
   return { ...save, log: [line, ...(Array.isArray(save.log) ? save.log : [])].slice(0, 10) };
 }
 
+function repCapFor(save) {
+  const day = Number(save?.day) || 1;
+  const upgrades = getUpgrades(save).length;
+  return Math.min(100, 18 + Math.floor(day * 2.2) + upgrades * 4);
+}
+
+function cashCapFor(save) {
+  const day = Number(save?.day) || 1;
+  const upgrades = getUpgrades(save).length;
+  const stock = totalStock(save);
+  return Math.round(900 + day * 210 + upgrades * 250 + stock * 4);
+}
+
+function normalizeSave(raw) {
+  if (!raw) return START_SAVE;
+  if (raw.economyVersion === ECONOMY_VERSION) return raw;
+
+  const sortedComics = Array.isArray(raw.comicCollection)
+    ? [...raw.comicCollection].sort((a, b) => (Number(b.value) || 0) - (Number(a.value) || 0))
+    : [];
+  const keptComics = sortedComics.slice(0, 18);
+  const archivedCount = Math.max(0, sortedComics.length - keptComics.length);
+  const archivedValue = sortedComics.slice(18).reduce((sum, comic) => sum + (Number(comic.value) || 0), 0);
+
+  const next = addLog({
+    ...raw,
+    economyVersion: ECONOMY_VERSION,
+    cash: Math.min(Number(raw.cash) || 0, cashCapFor(raw)),
+    rep: Math.min(Number(raw.rep) || 0, repCapFor(raw)),
+    comicCollection: keptComics,
+    archivedComicCount: (Number(raw.archivedComicCount) || 0) + archivedCount,
+    archivedComicValue: (Number(raw.archivedComicValue) || 0) + archivedValue
+  }, archivedCount > 0
+    ? `Economy balanced: archived ${archivedCount} extra comics as legacy collection history.`
+    : "Economy balanced for the new growth curve."
+  );
+  setSave(next);
+  return next;
+}
+
+function ensureSave() {
+  const existing = getSave();
+  if (existing) return normalizeSave(existing);
+  setSave(START_SAVE);
+  return START_SAVE;
+}
+
 function estimateTraffic(save) {
-  const upgrades = getUpgrades(save);
-  return 4 + Math.floor((Number(save.rep) || 0) / 10) + upgrades.length * 2;
+  const day = Number(save?.day) || 1;
+  const upgrades = getUpgrades(save).length;
+  const rep = Number(save?.rep) || 0;
+  return Math.min(26, 4 + Math.floor(rep / 18) + upgrades + Math.floor(day / 7));
+}
+
+function operatingExpense(save, traffic) {
+  const upgrades = getUpgrades(save).length;
+  const stock = totalStock(save);
+  return Math.round(42 + upgrades * 18 + Math.floor(stock / 14) * 4 + Math.floor(traffic / 6) * 6);
 }
 
 function runSimpleDay(save) {
@@ -81,23 +132,24 @@ function runSimpleDay(save) {
     const item = available[Math.floor(Math.random() * available.length)];
     item.stock -= 1;
     const isTrendSale = item.id === trend.itemId;
-    const trendBonus = isTrendSale ? 1.45 : 1;
-    const price = Math.round((item.price || 8) * trendBonus * (1 + Math.min(Number(save.rep) || 0, 80) / 250));
+    const trendBonus = isTrendSale ? 1.35 : 1;
+    const price = Math.round((item.price || 8) * trendBonus * (1 + Math.min(Number(save.rep) || 0, 80) / 360));
     gross += price;
     sales += 1;
     if (isTrendSale) trendSales += 1;
     if (lines.length < 4) lines.push(`${item.icon || "📦"} Sold ${item.name} for $${price}${isTrendSale ? " — trend boosted" : ""}.`);
   }
 
-  const rent = 35 + getUpgrades(save).length * 8;
-  const net = gross - rent;
-  const repChange = sales >= Math.ceil(traffic / 2) ? 1 : 0;
+  const expenses = operatingExpense(save, traffic);
+  const net = gross - expenses;
+  const repChange = sales >= Math.ceil(traffic * 0.72) ? 1 : 0;
   const day = Number(save.day) || 1;
   const next = addLog({
     ...save,
+    economyVersion: ECONOMY_VERSION,
     day: day + 1,
     cash: Math.max(0, (Number(save.cash) || 0) + net),
-    rep: Math.min(100, Math.max(0, (Number(save.rep) || 0) + repChange)),
+    rep: Math.min(repCapFor(save), Math.max(0, (Number(save.rep) || 0) + repChange)),
     inventory,
     trendWins: (Number(save.trendWins) || 0) + trendSales,
     lifetimeSales: (Number(save.lifetimeSales) || 0) + gross,
@@ -115,7 +167,8 @@ function runSimpleDay(save) {
       trendSales,
       trend,
       gross,
-      rent,
+      rent: expenses,
+      expenses,
       net,
       repChange,
       lines
@@ -126,7 +179,7 @@ function runSimpleDay(save) {
 function restock(save, itemId, amount = 8) {
   const item = INVENTORY_CATALOG[itemId];
   if (!item) return save;
-  const cost = amount * Math.max(3, Math.floor((item.price || 8) * 0.55));
+  const cost = amount * Math.max(4, Math.ceil((item.price || 8) * 0.72));
   if ((Number(save.cash) || 0) < cost) return addLog(save, `Not enough cash to restock ${item.name}.`);
 
   const inventory = Array.isArray(save.inventory) ? save.inventory.map(inv => ({ ...inv })) : [];
@@ -146,7 +199,7 @@ function buildUpgrade(save, id) {
   const next = addLog({
     ...save,
     cash: (Number(save.cash) || 0) - cost,
-    rep: Math.min(100, (Number(save.rep) || 0) + 4),
+    rep: Math.min(repCapFor(save), (Number(save.rep) || 0) + 1),
     upgrades: [...getUpgrades(save), id]
   }, `Built upgrade: ${UPGRADE_NAMES[id] || id}.`);
   setSave(next);
@@ -179,7 +232,7 @@ function TrendCard({ save }) {
             <h2 className="mt-1 text-2xl font-black">{trend.icon} {trend.name}</h2>
             <p className="mt-1 text-sm font-semibold text-slate-300">{item?.name || "Trending items"} sell for a bonus this week.</p>
           </div>
-          <div className="shrink-0 rounded-2xl bg-amber-400 px-3 py-2 text-sm font-black text-slate-950">145% sale value</div>
+          <div className="shrink-0 rounded-2xl bg-amber-400 px-3 py-2 text-sm font-black text-slate-950">135% sale value</div>
         </div>
         <div className="mt-4 grid grid-cols-3 gap-2">
           <MiniDark label="Trend Stock" value={stock} />
@@ -204,7 +257,7 @@ function BuyMarket({ save, onBuy }) {
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
       {Object.values(INVENTORY_CATALOG).map(item => {
         const amount = item.id === "figures" ? 4 : item.id === "cards" ? 12 : 8;
-        const cost = amount * Math.max(3, Math.floor((item.price || 8) * 0.55));
+        const cost = amount * Math.max(4, Math.ceil((item.price || 8) * 0.72));
         return <button key={item.id} onClick={() => onBuy(item.id, amount)} className="rounded-[1.5rem] bg-slate-50 p-4 text-left shadow-sm ring-1 ring-black/5 active:scale-[.99]">
           <div className="flex items-start justify-between gap-3">
             <div className="text-3xl">{item.icon}</div>
@@ -263,6 +316,7 @@ function DayReport({ report, onClose }) {
         <Mini label="Gross" value={`$${report.gross}`} />
         <Mini label="Net" value={`$${report.net}`} hot={report.net >= 0} />
       </div>
+      <div className="mt-4 rounded-2xl bg-slate-50 p-3 text-sm font-bold text-slate-700 ring-1 ring-black/5">Operating expenses: ${report.expenses ?? report.rent}</div>
       <div className="mt-4 space-y-2">
         {report.lines.length ? report.lines.map((line, index) => <div key={`${line}-${index}`} className="rounded-2xl bg-slate-50 p-3 text-sm font-bold text-slate-700 ring-1 ring-black/5">{line}</div>) : <div className="rounded-2xl bg-slate-50 p-3 text-sm font-bold text-slate-700 ring-1 ring-black/5">No standout notes today. The register survived.</div>}
       </div>
@@ -301,7 +355,7 @@ export default function CleanGame() {
 
   useEffect(() => {
     const refresh = () => {
-      setLocalSave(getSave() || START_SAVE);
+      setLocalSave(normalizeSave(getSave() || START_SAVE));
       setTick(t => t + 1);
     };
     window.addEventListener("longbox-save-changed", refresh);
@@ -325,9 +379,8 @@ export default function CleanGame() {
   }
 
   function handleFindComic() {
-    const result = findComicForCollection("Paid Scout Search");
+    findComicForCollection("Paid Scout Search");
     setLocalSave(getSave() || save);
-    if (!result?.ok) return;
   }
 
   function handleNav(id) {
@@ -365,14 +418,7 @@ export default function CleanGame() {
         {activeTab === "shop" && <div className="grid gap-4 lg:grid-cols-[1.25fr_.75fr]">
           <div className="space-y-4">
             <TrendCard save={save} />
-            <FloorMap
-              upgrades={upgrades}
-              interactive
-              selectedZoneId={selectedZone?.id}
-              onZoneClick={setSelectedZone}
-              title="Clean Floor Map"
-              subtitle="Reusable FloorMap, ZoneDetails, LiveDay, Missions, and Collection components"
-            />
+            <FloorMap upgrades={upgrades} interactive selectedZoneId={selectedZone?.id} onZoneClick={setSelectedZone} title="Clean Floor Map" subtitle="Reusable FloorMap, ZoneDetails, LiveDay, Missions, and Collection components" />
             <div className="grid gap-2 sm:grid-cols-3">
               <button onClick={() => handleRestock("new", 8)} className="rounded-2xl bg-white p-4 text-left font-black shadow-sm ring-1 ring-black/5 active:scale-[.99]">📚 Restock New<br /><span className="text-xs text-slate-500">Stock: {stockFor(save, "new")}</span></button>
               <button onClick={() => handleRestock("manga", 8)} className="rounded-2xl bg-white p-4 text-left font-black shadow-sm ring-1 ring-black/5 active:scale-[.99]">🌸 Restock Manga<br /><span className="text-xs text-slate-500">Stock: {stockFor(save, "manga")}</span></button>
@@ -399,8 +445,8 @@ export default function CleanGame() {
 
       <ZoneDetails zone={selectedZone} save={save} open={!!selectedZone} onClose={() => setSelectedZone(null)} />
       <LiveDay open={liveOpen} save={save} upgrades={upgrades} onClose={() => setLiveOpen(false)} onComplete={finishLiveDay} />
-      <MissionSystem open={missionsOpen} onClose={() => setMissionsOpen(false)} save={save} onChanged={() => setLocalSave(getSave() || START_SAVE)} />
-      <CollectionModal open={collectionOpen} onClose={() => setCollectionOpen(false)} save={save} onChanged={() => setLocalSave(getSave() || START_SAVE)} />
+      <MissionSystem open={missionsOpen} onClose={() => setMissionsOpen(false)} save={save} onChanged={() => setLocalSave(normalizeSave(getSave() || START_SAVE))} />
+      <CollectionModal open={collectionOpen} onClose={() => setCollectionOpen(false)} save={save} onChanged={() => setLocalSave(normalizeSave(getSave() || START_SAVE))} />
       <DayReport report={dayReport} onClose={() => setDayReport(null)} />
     </GameShell>
     <BottomNav active={activeTab} onSelect={handleNav} />
