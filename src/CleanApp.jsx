@@ -4,12 +4,8 @@ import { getTrend, INVENTORY_CATALOG } from "./game/catalog";
 import { getSave, getUpgrades, stockFor, totalStock } from "./game/save";
 
 // Longbox Legends clean entry point.
-//
-// The deployed game now runs through the rebuilt component architecture:
-// GameShell, FloorMap, ZoneDetails, LiveDay, MissionSystem, and CollectionModal.
-// The older AppV prototype files remain in the repo as fallback/reference while
-// new work moves into reusable components under src/components and logic modules
-// under src/game.
+// The deployed game runs through the rebuilt component architecture while this
+// wrapper handles a few lightweight UI helpers.
 
 const INVENTORY_NAMES = [
   "New Release Comics",
@@ -58,12 +54,10 @@ function mergeBuyTabControls() {
   if (eyebrow) eyebrow.textContent = "Inventory Manager";
 
   const heading = Array.from(pricingSection.querySelectorAll("h2")).find(node => textOf(node) === "Set Prices");
-  if (heading) heading.textContent = "Buy Stock & Set Prices";
+  if (heading) heading.textContent = "Stock & Prices";
 
   const intro = pricingSection.querySelector("p");
-  if (intro) {
-    intro.textContent = "Manage each section in one place: stock level, base price, pricing strategy, and restock button.";
-  }
+  if (intro) intro.textContent = "Pick a price. Buy stock. Then open the shop.";
 
   for (const name of INVENTORY_NAMES) {
     const priceCard = Array.from(pricingSection.querySelectorAll("div"))
@@ -83,53 +77,25 @@ function mergeBuyTabControls() {
   buySection.setAttribute("data-longbox-hidden-buy-section", "true");
 }
 
-function estimateTraffic(save) {
+function trafficFor(save) {
   const day = Number(save?.day) || 1;
   const upgrades = getUpgrades(save).length;
   const rep = Number(save?.rep) || 0;
   return Math.min(26, 4 + Math.floor(rep / 18) + upgrades + Math.floor(day / 7));
 }
 
-function estimateExpense(save, traffic) {
-  const upgrades = getUpgrades(save).length;
-  const stock = totalStock(save);
-  return Math.round(42 + upgrades * 18 + Math.floor(stock / 14) * 4 + Math.floor(traffic / 6) * 6);
-}
-
-function collectibleOutlook(save) {
-  const upgrades = getUpgrades(save);
-  const rep = Number(save?.rep) || 0;
-  let score = 1;
-  if (upgrades.includes("wall")) score += 1;
-  if (upgrades.includes("case")) score += 2;
-  if (rep >= 35) score += 1;
-  if (rep >= 60) score += 1;
-  if (score >= 5) return { label: "Strong", detail: "Collector upgrades and rep are helping rare finds." };
-  if (score >= 3) return { label: "Decent", detail: "You have some collector energy. Rare Case would improve it." };
-  return { label: "Low", detail: "Build Longbox Wall or Rare Case to make finds feel more likely." };
-}
-
-function pricingRisk(save) {
-  const pricing = save?.priceStrategy || {};
-  const rep = Number(save?.rep) || 0;
-  const premiumCount = Object.values(pricing).filter(value => ["premium", "collector"].includes(value)).length;
-  if (premiumCount >= 3 && rep < 45) return { label: "High", detail: "Several sections are priced high for your current rep." };
-  if (premiumCount >= 2) return { label: "Medium", detail: "Good margins, but watch skipped customers in the report." };
-  return { label: "Low", detail: "Pricing should not scare off many customers." };
-}
-
-function stockHealth(save) {
-  const stock = totalStock(save);
-  if (stock < 20) return { label: "Thin", detail: `${stock} total stock. Restock before opening.` };
-  if (stock < 45) return { label: "Okay", detail: `${stock} total stock. Enough to open, but watch trends.` };
-  return { label: "Healthy", detail: `${stock} total stock. Shelves can handle traffic.` };
-}
-
-function buildTodayPlan(save) {
+function getSimpleCoach(save) {
   if (!save) {
-    return [
-      { icon: "🏪", title: "Start the shop", detail: "Open the game, stock a few shelves, then run your first live day." }
-    ];
+    return {
+      headline: "Stock shelves, then open.",
+      subline: "That is the game. Buy stuff, sell stuff, get better stuff.",
+      steps: [
+        { icon: "📦", label: "Stock", value: "Buy comics" },
+        { icon: "⚖️", label: "Price", value: "Fair is safe" },
+        { icon: "▶️", label: "Open", value: "Run day" }
+      ],
+      note: "Start simple. Fancy stuff can wait."
+    };
   }
 
   const day = Number(save.day) || 1;
@@ -137,84 +103,53 @@ function buildTodayPlan(save) {
   const trendItem = INVENTORY_CATALOG[trend.itemId];
   const trendStock = stockFor(save, trend.itemId);
   const stock = totalStock(save);
-  const upgrades = getUpgrades(save);
   const rep = Number(save.rep) || 0;
+  const upgrades = getUpgrades(save);
   const pricing = save.priceStrategy || {};
-  const ideas = [];
+  const highPrices = Object.values(pricing).filter(value => ["premium", "collector"].includes(value)).length;
 
-  if (trendItem && trendStock < 8) {
-    ideas.push({
-      icon: trend.icon || "🔥",
-      title: `Stock the trend: ${trendItem.name}`,
-      detail: `${trend.name} is hot this week, but you only have ${trendStock}. Restock before opening.`
-    });
-  } else if (trendItem) {
-    ideas.push({
-      icon: trend.icon || "🔥",
-      title: `Use the ${trend.name} trend`,
-      detail: `${trendItem.name} has ${trendStock} in stock. Consider Premium pricing if demand feels strong.`
-    });
+  let headline = "Open the shop.";
+  let subline = "You are good enough to run a day. Do not overthink it.";
+  let note = `${trend.icon} Trend: ${trendItem?.name || "Hot items"} (${trendStock} stocked).`;
+
+  if (stock < 20) {
+    headline = "Buy stock first.";
+    subline = "Shelves are too empty. Customers hate empty shelves. Very rude of them, but true.";
+  } else if (trendItem && trendStock < 6) {
+    headline = `Restock ${trendItem.name}.`;
+    subline = "The trend item is low. Feed the trend before opening.";
+  } else if (highPrices >= 3 && rep < 45) {
+    headline = "Lower some prices.";
+    subline = "Too much Premium/Collector pricing can make customers walk out.";
+  } else if (!upgrades.includes("wall") && Number(save.cash) >= 380) {
+    headline = "Build Longbox Wall.";
+    subline = "It makes the shop feel more like a real comic shop and helps collector gameplay.";
+  } else if (upgrades.includes("wall") && !upgrades.includes("case") && Number(save.cash) >= 600) {
+    headline = "Build Rare Case.";
+    subline = "It helps rare collectible finds. Also: shiny case go brrr.";
   }
 
-  if (stock < 30) {
-    ideas.push({
-      icon: "📦",
-      title: "Shelves look thin",
-      detail: `You have ${stock} total stock. Restock before opening so customers do not bounce.`
-    });
-  }
-
-  if (!upgrades.includes("wall")) {
-    ideas.push({
-      icon: "🗄️",
-      title: "Build the Longbox Wall",
-      detail: "It makes back issues more meaningful and helps collectible discovery feel tied to the floor map."
-    });
-  } else if (!upgrades.includes("case")) {
-    ideas.push({
-      icon: "🔐",
-      title: "Aim for the Rare Case",
-      detail: "The Rare Case improves collector appeal and can allow extra collectible finds during Live Day."
-    });
-  }
-
-  const premiumCount = Object.values(pricing).filter(value => ["premium", "collector"].includes(value)).length;
-  if (premiumCount >= 3 && rep < 45) {
-    ideas.push({
-      icon: "⚠️",
-      title: "Watch price pushback",
-      detail: "Several sections are priced high. With lower rep, customers may skip purchases and hurt growth."
-    });
-  }
-
-  if (ideas.length < 3 && rep < 35) {
-    ideas.push({
-      icon: "⭐",
-      title: "Grow reputation steadily",
-      detail: "Fair pricing, full shelves, and completed missions are safer than chasing giant margins early."
-    });
-  }
-
-  if (ideas.length < 3) {
-    ideas.push({
-      icon: "▶️",
-      title: "Open the shop",
-      detail: "You are stocked enough to run a day. Watch the report for skipped customers and trend sales."
-    });
-  }
-
-  return ideas.slice(0, 3);
+  return {
+    headline,
+    subline,
+    steps: [
+      { icon: stock < 20 ? "⚠️" : "📦", label: "Stock", value: stock < 20 ? "Low" : `${stock} total` },
+      { icon: highPrices >= 3 && rep < 45 ? "⚠️" : "⚖️", label: "Price", value: highPrices >= 3 && rep < 45 ? "Too high" : "Mostly fair" },
+      { icon: "▶️", label: "Open", value: `${trafficFor(save)} visitors` }
+    ],
+    note
+  };
 }
 
-function PreviewStat({ label, value, detail, hot = false, warn = false }) {
-  return <div className={`${hot ? "bg-slate-950 text-white" : warn ? "bg-amber-50 text-amber-950 ring-amber-100" : "bg-slate-50 text-slate-950"} rounded-2xl p-3 ring-1 ring-black/5`}>
-    <div className={`text-[10px] font-black uppercase tracking-wide ${hot ? "text-amber-300" : warn ? "text-amber-700" : "text-slate-500"}`}>{label}</div>
-    <div className="mt-1 text-lg font-black">{value}</div>
-    {detail && <div className={`mt-1 text-xs font-semibold ${hot ? "text-slate-300" : warn ? "text-amber-800" : "text-slate-500"}`}>{detail}</div>}
+function CoachStep({ step }) {
+  return <div className="rounded-2xl bg-slate-50 p-3 ring-1 ring-black/5">
+    <div className="text-2xl">{step.icon}</div>
+    <div className="mt-1 text-[10px] font-black uppercase tracking-wide text-slate-500">{step.label}</div>
+    <div className="mt-1 text-base font-black">{step.value}</div>
   </div>;
 }
 
-function TodayPlan() {
+function SimpleCoach() {
   const [save, setSaveState] = useState(() => getSave());
 
   useEffect(() => {
@@ -232,56 +167,22 @@ function TodayPlan() {
     };
   }, []);
 
-  const ideas = useMemo(() => buildTodayPlan(save), [save]);
-  const traffic = estimateTraffic(save);
-  const expense = estimateExpense(save, traffic);
-  const stock = stockHealth(save);
-  const risk = pricingRisk(save);
-  const finds = collectibleOutlook(save);
-  const trend = getTrend(Number(save?.day) || 1);
-  const trendItem = INVENTORY_CATALOG[trend.itemId];
-  const trendStock = stockFor(save, trend.itemId);
+  const coach = useMemo(() => getSimpleCoach(save), [save]);
 
   return <div className="bg-[#f6efe3] px-3 pt-3 text-slate-950 lg:px-6 lg:pt-6">
     <section className="mx-auto max-w-7xl rounded-[1.75rem] bg-white p-4 shadow-sm ring-1 ring-black/5">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <div className="text-xs font-black uppercase tracking-widest text-amber-600">Today&apos;s Plan</div>
-          <h2 className="mt-1 text-xl font-black sm:text-2xl">Best next moves</h2>
+          <div className="text-xs font-black uppercase tracking-widest text-amber-600">Simple Mode</div>
+          <h2 className="mt-1 text-2xl font-black sm:text-3xl">{coach.headline}</h2>
+          <p className="mt-1 text-sm font-bold text-slate-500">{coach.subline}</p>
         </div>
         <div className="rounded-full bg-slate-950 px-3 py-1 text-xs font-black text-white">Day {save?.day || 1}</div>
       </div>
-      <div className="mt-3 grid gap-2 lg:grid-cols-3">
-        {ideas.map((idea, index) => <div key={`${idea.title}-${index}`} className="rounded-2xl bg-slate-50 p-3 ring-1 ring-black/5">
-          <div className="flex gap-3">
-            <div className="text-2xl">{idea.icon}</div>
-            <div>
-              <div className="text-sm font-black">{idea.title}</div>
-              <div className="mt-1 text-xs font-semibold text-slate-500">{idea.detail}</div>
-            </div>
-          </div>
-        </div>)}
+      <div className="mt-4 grid grid-cols-3 gap-2">
+        {coach.steps.map(step => <CoachStep key={step.label} step={step} />)}
       </div>
-
-      <div className="mt-4 border-t border-black/5 pt-4">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <div className="text-xs font-black uppercase tracking-widest text-slate-500">Open Day Preview</div>
-            <h3 className="mt-1 text-lg font-black">Ready check before opening</h3>
-          </div>
-          <div className="rounded-full bg-amber-100 px-3 py-1 text-xs font-black text-amber-900">{trend.icon} {trend.name}</div>
-        </div>
-        <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
-          <PreviewStat label="Traffic" value={traffic} detail="expected visitors" hot />
-          <PreviewStat label="Expense" value={`$${expense}`} detail="estimated overhead" />
-          <PreviewStat label="Stock" value={stock.label} detail={stock.detail} warn={stock.label === "Thin"} />
-          <PreviewStat label="Pricing Risk" value={risk.label} detail={risk.detail} warn={risk.label === "High"} />
-          <PreviewStat label="Find Odds" value={finds.label} detail={finds.detail} />
-        </div>
-        {trendItem && <div className="mt-3 rounded-2xl bg-slate-50 p-3 text-sm font-bold text-slate-600 ring-1 ring-black/5">
-          Trend opportunity: <span className="text-slate-950">{trendItem.name}</span> has {trendStock} in stock and sells with the weekly trend bonus.
-        </div>}
-      </div>
+      <div className="mt-3 rounded-2xl bg-amber-50 p-3 text-sm font-black text-amber-950 ring-1 ring-amber-100">{coach.note}</div>
     </section>
   </div>;
 }
@@ -302,7 +203,7 @@ export default function CleanApp() {
   }, []);
 
   return <>
-    <TodayPlan />
+    <SimpleCoach />
     <CleanGame />
   </>;
 }
