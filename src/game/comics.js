@@ -16,6 +16,7 @@ export const COMICS = [
 ];
 
 export const RARITY_WEIGHTS = { Common: 54, Uncommon: 26, Rare: 15, Epic: 5 };
+export const SCOUT_RARITY_WEIGHTS = { Common: 72, Uncommon: 22, Rare: 5, Epic: 1 };
 
 export const RARITY_COLORS = {
   Common: "bg-slate-100 text-slate-700",
@@ -24,17 +25,17 @@ export const RARITY_COLORS = {
   Epic: "bg-amber-100 text-amber-900"
 };
 
-export function weightedComicPick() {
+export function weightedComicPick(weights = RARITY_WEIGHTS) {
   const pool = [];
   COMICS.forEach(comic => {
-    const weight = RARITY_WEIGHTS[comic.rarity] || 10;
+    const weight = weights[comic.rarity] || 1;
     for (let i = 0; i < weight; i += 1) pool.push(comic);
   });
   return pool[Math.floor(Math.random() * pool.length)];
 }
 
-export function makeComic(day = 1, source = "Shop Find") {
-  const base = weightedComicPick();
+export function makeComic(day = 1, source = "Shop Find", weights = RARITY_WEIGHTS) {
+  const base = weightedComicPick(weights);
   const gradeRoll = Math.random();
   const gradeSuffix = base.grade.includes("Slab") ? "" : gradeRoll > 0.9 ? "+" : gradeRoll < 0.12 ? "-" : "";
   const valueMod = gradeRoll > 0.9 ? 1.25 : gradeRoll < 0.12 ? 0.82 : 1;
