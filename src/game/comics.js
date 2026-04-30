@@ -1,4 +1,4 @@
-import { addLog, getCollection, getSave, getUpgrades, setSave } from "./save";
+import { addLog, getCollection, getSave, getUpgrades, setSave, stockFor } from "./save";
 
 export const COMICS = [
   { id: "possum-1", title: "Possum Knight #1", icon: "🦝", rarity: "Rare", grade: "VF", value: 360, prestige: 5, tag: "Back Issue", desc: "First appearance of a hero who plays dead until issue six." },
@@ -16,7 +16,8 @@ export const COMICS = [
 ];
 
 export const RARITY_WEIGHTS = { Common: 54, Uncommon: 26, Rare: 15, Epic: 5 };
-export const SCOUT_RARITY_WEIGHTS = { Common: 72, Uncommon: 22, Rare: 5, Epic: 1 };
+export const NATURAL_RARITY_WEIGHTS = { Common: 62, Uncommon: 28, Rare: 8, Epic: 2 };
+export const COLLECTOR_RARITY_WEIGHTS = { Common: 52, Uncommon: 30, Rare: 14, Epic: 4 };
 
 export const RARITY_COLORS = {
   Common: "bg-slate-100 text-slate-700",
@@ -25,22 +26,37 @@ export const RARITY_COLORS = {
   Epic: "bg-amber-100 text-amber-900"
 };
 
-export function weightedComicPick(weights = RARITY_WEIGHTS) {
-  const pool = [];
-  COMICS.forEach(comic => {
-    const weight = weights[comic.rarity] || 1;
-    for (let i = 0; i < weight; i += 1) pool.push(comic);
-  });
-  return pool[Math.floor(Math.random() * pool.length)];
+export const DISCOVERY_SOURCES = [
+  { id: "new", label: "New Releases Wall", itemId: "new", weight: 18, upgrade: "sign" },
+  { id: "manga", label: "Manga Corner", itemId: "manga", weight: 14, upgrade: "manga" },
+  { id: "longboxes", label: "Back Issue Longboxes", itemId: "back", weight: 34, upgrade: "wall" },
+  { id: "rare", label: "Rare Case", itemId: "figures", weight: 20, upgrade: "case" },
+  { id: "cards", label: "Cards & Events", itemId: "cards", weight: 14, upgrade: "tables" }
+];
+
+export function weightedPick(items, getWeight = item => item.weight || 1) {
+  const total = items.reduce((sum, item) => sum + Math.max(0, getWeight(item)), 0);
+  if (total <= 0) return items[0];
+  let roll = Math.random() * total;
+  for (const item of items) {
+    roll -= Math.max(0, getWeight(item));
+    if (roll <= 0) return item;
+  }
+  return items[items.length - 1];
 }
 
-export function makeComic(day = 1, source = "Shop Find", weights = RARITY_WEIGHTS) {
+export function weightedComicPick(weights = RARITY_WEIGHTS) {
+  return weightedPick(COMICS, comic => weights[comic.rarity] || 1);
+}
+
+export function makeComic(day = 1, source = "Shop Find", weights = RARITY_WEIGHTS, extra = {}) {
   const base = weightedComicPick(weights);
   const gradeRoll = Math.random();
   const gradeSuffix = base.grade.includes("Slab") ? "" : gradeRoll > 0.9 ? "+" : gradeRoll < 0.12 ? "-" : "";
   const valueMod = gradeRoll > 0.9 ? 1.25 : gradeRoll < 0.12 ? 0.82 : 1;
   return {
     ...base,
+    ...extra,
     uid: `${base.id}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
     foundDay: day,
     foundSource: source,
@@ -61,13 +77,50 @@ export function collectionStats(owned = getCollection()) {
 
 export function naturalFindChance(save = getSave()) {
   const upgrades = getUpgrades(save);
-  let chance = 0.18;
-  if (upgrades.includes("wall")) chance += 0.1;
-  if (upgrades.includes("case")) chance += 0.08;
-  if (upgrades.includes("sign")) chance += 0.03;
-  if ((save?.day || 1) % 7 === 0) chance += 0.06;
-  if ((save?.rep || 0) >= 25) chance += 0.04;
-  return Math.min(0.5, chance);
+  let chance = 0.055;
+  chance += Math.min(0.08, (Number(save?.rep) || 0) / 1200);
+  if (upgrades.includes("wall")) chance += 0.025;
+  if (upgrades.includes("case")) chance += 0.04;
+  if (upgrades.includes("sign")) chance += 0.01;
+  if ((save?.day || 1) % 7 === 0) chance += 0.015;
+  return Math.min(0.18, chance);
+}
+
+export function getDiscoverySources(save = getSave()) {
+  const upgrades = getUpgrades(save);
+  return DISCOVERY_SOURCES.map(source => {
+    const hasStock = source.itemId ? stockFor(save, source.itemId) > 0 : true;
+    const built = source.upgrade ? upgrades.includes(source.upgrade) : false;
+    return {
+      ...source,
+      weight: source.weight + (built ? 12 : 0) + (hasStock ? 6 : -8)
+    };
+  }).filter(source => source.weight > 0);
+}
+
+export function rollNaturalComicFinds(save = getSave(), traffic = 0) {
+  const upgrades = getUpgrades(save);
+  const day = Number(save?.day) || 1;
+  const rolls = Math.max(1, Math.min(5, Math.floor((Number(traffic) || 0) / 4)));
+  const maxFinds = upgrades.includes("case") ? 2 : 1;
+  const sources = getDiscoverySources(save);
+  const finds = [];
+
+  for (let i = 0; i < rolls; i += 1) {
+    if (finds.length >= maxFinds) break;
+    if (Math.random() > naturalFindChance(save)) continue;
+
+    const source = weightedPick(sources);
+    if (!source) continue;
+    const weights = source.id === "rare" || upgrades.includes("case") ? COLLECTOR_RARITY_WEIGHTS : NATURAL_RARITY_WEIGHTS;
+    const comic = makeComic(day, source.label, weights, {
+      discoverySourceId: source.id,
+      discoverySourceLabel: source.label
+    });
+    finds.push(comic);
+  }
+
+  return finds;
 }
 
 export function addComicToCollection(comic) {
